@@ -5,5 +5,4 @@ JStorch provides even higher-level abstraction for building networks via pytorch
 
 The models are contained in JStorch.models, and are designed to be modular. Currently models include:
 
-[X] dNN - a modular architecture for building a sequential deep NN with 1D inputs. 
-[ ] rNN - a modular architecture for building recurrent NNs
+[x] dNN - a modular architecture for building a sequential deep NN with 1D inputs. 

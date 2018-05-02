@@ -1,10 +1,10 @@
 """
 models.py
 
-A series of models for facilitating neural network architectures / learning using pytorch
+A series of models for facilitating neural network architectures and learning using pytorch
 
-The models below are wrappers around native pytorch models, in an attempt to abstract away from the 
-(slightly) lower-level building of network architectures and for facilitating rapid implementation networks.
+The models below are wrappers around native pytorch modules, in an attempt to abstract away from the 
+(slightly) lower-level building of network architectures and for facilitating rapid implementation of different networks.
 
 Included below are:
 
@@ -58,7 +58,6 @@ class dNN():
                 model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
 
         self.model = torch.nn.Sequential(model)
-        self.modeldict = model
         self.lossfcn = lossfcn
 
         # push to GPU if available
@@ -75,7 +74,7 @@ class dNN():
         params = self.model.state_dict()
         for param in params.keys():
             if 'weight' in param:
-                torch.nn.init.normal_(params[param])
+                torch.nn.init.normal_(params[param]) / sqrt(params[param].shape[0])
             elif 'bias' in param:
                 torch.nn.init.constant_(params[param],0)
 
@@ -159,9 +158,10 @@ class dNN():
         """
 
         # check X, Y shapes and convert to tensors
-        N,D = X.shape
-        M,K = Y.shape
+        N,D_in = X.shape
+        M,D_out = Y.shape
         assert( N == M,'# of samples in X and Y do not match' )
+        
         shuffleInds = np.arange(N)
         X_tensor = self._toTensor(X)
         Y_tensor = self._toTensor(Y)    
@@ -170,7 +170,7 @@ class dNN():
         self._initialize()
         self.costs = np.zeros(nEpochs)    
         self.optimizer = optimizer(self.model.parameters(),lr=alpha,weight_decay=regularization)
-        self.model.train()
+        self.model.train() # sets model to training mode so we can update params
       
         # find the # of batches for this training set
         nBatches = int(np.floor(N / batchSize))
