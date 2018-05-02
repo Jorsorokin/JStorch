@@ -1,17 +1,21 @@
 """
 models.py
 
-A series of modules for facilitating neural network architectures / learning using pytorch
+A series of models for facilitating neural network architectures / learning using pytorch
 
-The modules below are wrappers around native pytorch modules, in an attempt to abstract away from the 
-(slightly) lower-level building of network architectures for facilitating rapid implementation networks.
+The models below are wrappers around native pytorch models, in an attempt to abstract away from the 
+(slightly) lower-level building of network architectures and for facilitating rapid implementation networks.
 
 Included below are:
 
 dNN - a simple sequential deep neural network, with arbitrary # of layers, 
       units per layer, activation functions, and loss function
 
-rNN - a simple recurrent neural network
+
+Written by Jordan Sorokin
+
+Change Log:
+5/1/18 - finished dNN() architecture
 
 """
 
