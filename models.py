@@ -45,8 +45,6 @@ class dNN():
                 a boolean flag for normalizing hidden layers. If true, each layer will be normalized via batch normalization.
                 Default = True
         """
-        #super(dNN, self).__init__()
-
         self.L = len(layers)
         model = OrderedDict()
         for l in range(1,self.L):
@@ -56,6 +54,7 @@ class dNN():
                 model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
 
         self.model = torch.nn.Sequential(model)
+        self.modeldict = model
         self.lossfcn = lossfcn
 
         # push to GPU if available
@@ -64,6 +63,19 @@ class dNN():
             self.model.cuda()
         else:
             self.device = torch.device('cpu')
+
+    def _initialize(self):
+        """
+        Initializes parameters using xavier initialization (for weights) or setting to zero (for biases and parameters for normalizations)
+        """
+        params = self.model.state_dict()
+        for param in params.keys():
+            if 'weight' in param:
+                torch.nn.init.normal_(params[param])
+            elif 'bias' in param:
+                torch.nn.init.constant_(params[param],0)
+
+        self.model.load_state_dict(params)
 
     def _forward(self,X):
         """ 
@@ -85,16 +97,18 @@ class dNN():
         loss.backward()
         self.optimizer.step()
 
-    def _shuffle(self,X,Y):
+    def _shuffle(self,X,Y,inds):
         """
         Shuffles the data in X and Y in place to avoid memory overhead 
         """
-        state = np.random.get_state()
-        np.random.shuffle(X)
-        np.random.set_state(state)
-        np.random.shuffle(Y)
+        np.random.shuffle(inds)
+        return X[inds,:],Y[inds,:]
 
-        return X,Y
+    def _toTensor(self,X):
+        X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
+        X_tensor.to(self.device)
+
+        return X_tensor
 
     def fit(self,X,Y,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
         """
@@ -145,6 +159,7 @@ class dNN():
         N,D = X.shape
         M,K = Y.shape
         assert( N == M,'# of samples in X and Y do not match' )
+        shuffleInds = np.arange(N)
 
         nBatches = int(np.floor(N / batchSize))
         extra = np.mod(N,batchSize)
@@ -157,48 +172,48 @@ class dNN():
         self.optimizer = optimizer(self.model.parameters(),lr=alpha,weight_decay=regularization)
         self.model.train()
 
+        # convert X and Y to torch tensors
+        X_tensor = self._toTensor(X)
+        Y_tensor = self._toTensor(Y)
+
+        # initialize the parameters using xavier initialization
+        self._initialize()
+
         # loop over epochs
-        costs = np.zeros(nEpochs)
+        self.costs = np.zeros(nEpochs)
         tic = time()
         for epoch in range(nEpochs):
 
             # shuffle the indices in X and Y
-            X,Y = self._shuffle(X,Y)
-            X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
-            Y_tensor = torch.from_numpy(Y).type(torch.FloatTensor)
-
-            if self.device is 'cuda':
-                X_tensor.cuda()
-                Y_tensor.cuda()
+            X_tensor,Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
 
             # reset the gradients and loss
-            self.optimizer.zero_grad()
             running_cost = 0
 
             for batch in range(nBatches-1):
+                self.optimizer.zero_grad()
 
                 # select indices for this batch
                 indicies = torch.tensor(range(batches[batch], batches[batch+1]))
                 X_batch = torch.index_select(X_tensor,0,indicies)
                 Y_batch = torch.index_select(Y_tensor,0,indicies)
-                Y_batch.requires_grad = False # <--- ???
 
                 # forward pass
                 Yhat = self._forward(X_batch)
 
                 # compute loss
-                loss = self._compute_loss(Yhat.detach(),Y_batch) # <--- ???
+                loss = self.lossfcn(Yhat,Y_batch) 
                 running_cost += loss.item()
 
                 # backward pass
                 self._backward(loss)
 
             # store cost
-            costs[epoch] = running_cost / nBatches
+            self.costs[epoch] = running_cost / nBatches
 
             # print to screen if desired
             if verbose:
-                print('cost is: ' + str(costs[epoch]))
+                print('cost is: ' + str(self.costs[epoch]))
 
         toc = time()
         print('Finished training after ' + str(toc-tic) + ' seconds')
@@ -221,11 +236,8 @@ class dNN():
         # set model to eval mode
         self.model.eval()
 
-        X = torch.from_numpy(X).to(self.device)
-        Yhat = self.model(X)
+        X_tensor = self._toTensor(X)
+        Yhat = self._forward(X_tensor)
 
         # convert back to numpy array
-        if self.device is 'cuda':
-            Yhat.to('cpu')
-
-        return Yhat.numpy()
+        return Yhat.detach().to('cpu').numpy()
