@@ -66,7 +66,7 @@ class dNN():
 
     def _initialize(self):
         """
-        Initializes parameters using xavier initialization (for weights) or setting to zero (for biases and parameters for normalizations)
+        Initializes all parameters in the model
         """
         params = self.model.state_dict()
         for param in params.keys():
@@ -75,7 +75,7 @@ class dNN():
             elif 'bias' in param:
                 torch.nn.init.constant_(params[param],0)
 
-        self.model.load_state_dict(params)
+        self.model.load_state_dict(params) # re-supply the initialized params
 
     def _forward(self,X):
         """ 
@@ -105,9 +105,11 @@ class dNN():
         return X[inds,:],Y[inds,:]
 
     def _toTensor(self,X):
+        """
+        converts a numpy array to a torch tensor and pushes to GPU if available
+        """
         X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
         X_tensor.to(self.device)
-
         return X_tensor
 
     def fit(self,X,Y,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
@@ -143,9 +145,6 @@ class dNN():
 
         Returns:
         -------
-            Yhat :
-                predicted responses of X
-
             costs :
                 a list of costs calulated every 100 iterations
 
@@ -155,12 +154,21 @@ class dNN():
                       [true positive %, true negative %] ]
         """
 
-        # initialize the looping variables
+        # check X, Y shapes and convert to tensors
         N,D = X.shape
         M,K = Y.shape
         assert( N == M,'# of samples in X and Y do not match' )
         shuffleInds = np.arange(N)
-
+        X_tensor = self._toTensor(X)
+        Y_tensor = self._toTensor(Y)    
+        
+        # initialize the model parameters and optimizing function
+        self._initialize()
+        self.costs = np.zeros(nEpochs)    
+        self.optimizer = optimizer(self.model.parameters(),lr=alpha,weight_decay=regularization)
+        self.model.train()
+      
+        # find the # of batches for this training set
         nBatches = int(np.floor(N / batchSize))
         extra = np.mod(N,batchSize)
         batches = [batch*batchSize for batch in range(nBatches)]
@@ -168,55 +176,32 @@ class dNN():
             batches.append(batches[-1]+extra)
             nBatches += 1
 
-        # create our optimizing function and put model into train mode
-        self.optimizer = optimizer(self.model.parameters(),lr=alpha,weight_decay=regularization)
-        self.model.train()
-
-        # convert X and Y to torch tensors
-        X_tensor = self._toTensor(X)
-        Y_tensor = self._toTensor(Y)
-
-        # initialize the parameters using xavier initialization
-        self._initialize()
-
-        # loop over epochs
-        self.costs = np.zeros(nEpochs)
+        # --- epoch loop
         tic = time()
         for epoch in range(nEpochs):
-
-            # shuffle the indices in X and Y
-            X_tensor,Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
-
-            # reset the gradients and loss
             running_cost = 0
-
+            X_tensor,Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
+            
+            # --- minibatch loop 
             for batch in range(nBatches-1):
-                self.optimizer.zero_grad()
-
-                # select indices for this batch
+                self.optimizer.zero_grad() # resets gradients to avoid accumulation
                 indicies = torch.tensor(range(batches[batch], batches[batch+1]))
-                X_batch = torch.index_select(X_tensor,0,indicies)
+                X_batch = torch.index_select(X_tensor,0,indicies) 
                 Y_batch = torch.index_select(Y_tensor,0,indicies)
 
-                # forward pass
+                # do one full pass through model
                 Yhat = self._forward(X_batch)
-
-                # compute loss
                 loss = self.lossfcn(Yhat,Y_batch) 
+                self._backward(loss)
+                  
                 running_cost += loss.item()
 
-                # backward pass
-                self._backward(loss)
-
-            # store cost
+            # store cost and print to screen 
             self.costs[epoch] = running_cost / nBatches
-
-            # print to screen if desired
             if verbose:
                 print('cost is: ' + str(self.costs[epoch]))
 
-        toc = time()
-        print('Finished training after ' + str(toc-tic) + ' seconds')
+        print('Elapsed training time: ' + str(time() - tic) + ' seconds')
 
     def predict(self,X):
         """
@@ -233,11 +218,8 @@ class dNN():
                 predicted responses of X of size M x K, where K = size of output layer
         """
 
-        # set model to eval mode
-        self.model.eval()
-
+        self.model.eval() # avoids updating parameters 
+      
         X_tensor = self._toTensor(X)
         Yhat = self._forward(X_tensor)
-
-        # convert back to numpy array
         return Yhat.detach().to('cpu').numpy()
