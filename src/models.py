@@ -39,8 +39,9 @@ class DNN(NNutils):
                     a single unit, and an input "layer" containing 12 dimensions
 
             activations :
-                A list of aliased activation functions for the layers, of length L - 1, since we don't apply activations 
-                at the input layer. Valid activations are any contained in torch.nn.
+                A list of strings of activation functions for the layers, of length L - 1. 
+                Each strings must be of one of the following:
+                    ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
 
             normalizeLayers :
                 a boolean flag for normalizing hidden layers. If true, each layer will be normalized via batch normalization.
@@ -50,7 +51,7 @@ class DNN(NNutils):
         model = OrderedDict()
         for l in range(1,self.L):
             model['linear' + str(l)] = torch.nn.Linear(layers[l-1],layers[l])
-            model['activation' + str(l)] = activations[l-1] # l-1 since input layer does not have an activation
+            model['activation' + str(l)] = getattr(torch.nn,activations[l-1]) # l-1 since input layer does not have an activation
             if normalizeLayers and l != self.L-1:
                 model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
 
@@ -72,7 +73,7 @@ class DNN(NNutils):
 
             loss:
                 string for the loss function, of one of the following:
-                ['mse','l1','huber','kldiv','cross','loglikelihood','bce']
+                ['mse','l1','huber','kldiv','cross','llh','bce']
 
             optimizer :
                 the type of learning optimizer, of one of the following:
@@ -163,11 +164,9 @@ class sRNN(NNutils):
 
             activations :
                 A list of strings representing the rnn cell type for each layer in a stacked RNN (if layer > 1)
-                    'rnn' - vanilla recurrent network cell
-                    'lstm' - long short-term memory cell
-                    'gru' - gated recurrent unit cell
-
-                Default = ['lstm'] * len(layers)
+                    'RNN' - vanilla recurrent network cell
+                    'LSTM' - long short-term memory cell
+                    'GRU' - gated recurrent unit cell
 
             bias :
                 a boolean flag for computing bias from the network layers
@@ -186,20 +185,23 @@ class sRNN(NNutils):
                 inSize = layers[l-1][-1]
                 outSize = layers[l]
 
-            if activations[l] is 'rnn':
-                model[activations[l] + str(l+1)] = torch.nn.RNN(inSize,outSize,1)
-            elif activations[l] is 'lstm':
-                model[activations[l] + str(l+1)] = torch.nn.LSTM(inSize,outSize,1)
-            elif activations[l] is 'gru':
-                model[activations[l] + str(l+1)] = torch.nn.GRU(inSize,outSize,1)
+            model[activations[l] + str(l+1)] = gettatr(torch.nn,activations[l])(inSize,outSize,1)
+            
+        super().__init__(self,torch.nn.Sequential(model),type='rnn')
+
+
+            # if activations[l] is 'rnn':
+            #     model[activations[l] + str(l+1)] = torch.nn.RNN(inSize,outSize,1)
+            # elif activations[l] is 'lstm':
+            #     model[activations[l] + str(l+1)] = torch.nn.LSTM(inSize,outSize,1)
+            # elif activations[l] is 'gru':
+            #     model[activations[l] + str(l+1)] = torch.nn.GRU(inSize,outSize,1)
 
             #model['linear' + str(l+1)] = torch.nn.Linear(layers[l-1],layers[l])
             #model['activation' + str(l+1)] = activations[l-1] # l-1 since input layer does not have an activation
             
             #if normalizeLayers and l != self.L-1:
             #    model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
-
-        super().__init__(self,torch.nn.Sequential(model),type='rnn')
 
     def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
         """
@@ -216,7 +218,7 @@ class sRNN(NNutils):
 
             loss:
                 string for the loss function, of one of the following:
-                ['mse','l1','huber','kldiv','cross','loglikelihood','bce']
+                ['mse','l1','huber','kldiv','cross','llh','bce']
 
             optimizer :
                 the type of learning optimizer, of one of the following:

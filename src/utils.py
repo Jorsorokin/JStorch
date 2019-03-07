@@ -94,7 +94,7 @@ class NNutils():
             return torch.nn.L1Loss
         elif loss is 'cross':
             return torch.nn.CrossEntropyLoss
-        elif loss is 'loglikelihood':
+        elif loss is 'llh':
             return torch.nn.NLLLoss
         elif loss is 'kldiv':
             return torch.nn.KLDivLoss
