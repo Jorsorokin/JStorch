@@ -1,6 +1,4 @@
 """
-models.py
-
 A series of models for facilitating neural network architectures and learning using pytorch
 
 The models below are wrappers around native pytorch modules, in an attempt to abstract away from the 
@@ -15,17 +13,19 @@ dNN - a simple sequential deep neural network, with arbitrary # of layers,
 Written by Jordan Sorokin
 
 Change Log:
-5/1/18 - finished dNN() architecture
-
+5/1/18 - finished DNN architecture
+3/5/19 - updated class structure to inherit training utilities from NNutils superclass
+3/6/19 - working on stacked RNN model architecture (perhaps make RNN its own class?)
 """
 
 import numpy as np
-import torch
+import torch, utils
 from collections import OrderedDict
 from time import time
+from utils import NNutils
 
-class dNN():
-    def __init__(self,layers,activations,lossfcn,normalizeLayers=True):
+class DNN(NNutils):
+    def __init__(self,layers,activations,normalizeLayers=True):
         """
         Build a deep neural network with arbitrary # of layers & units, and varied activation functions per layer
 
@@ -42,9 +42,6 @@ class dNN():
                 A list of aliased activation functions for the layers, of length L - 1, since we don't apply activations 
                 at the input layer. Valid activations are any contained in torch.nn.
 
-            lossfcn : 
-                an alias of a torch loss function (MSEloss,NLLoss, ...) used for training the network
-
             normalizeLayers :
                 a boolean flag for normalizing hidden layers. If true, each layer will be normalized via batch normalization.
                 Default = True
@@ -57,65 +54,10 @@ class dNN():
             if normalizeLayers and l != self.L-1:
                 model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
 
-        self.model = torch.nn.Sequential(model)
-        self.lossfcn = lossfcn
+        # initialize model and parameters
+        super().__init__(self,torch.nn.Sequential(model),type='dnn') 
 
-        # push to GPU if available
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-            self.model.cuda()
-        else:
-            self.device = torch.device('cpu')
-
-    def _initialize(self):
-        """
-        Initializes all parameters in the model
-        """
-        params = self.model.state_dict()
-        for param in params.keys():
-            if 'weight' in param:
-                torch.nn.init.normal_(params[param]) / sqrt(params[param].shape[0])
-            elif 'bias' in param:
-                torch.nn.init.constant_(params[param],0)
-
-        self.model.load_state_dict(params) # re-supply the initialized params
-
-    def _forward(self,X):
-        """ 
-        Perform one forward pass of the model and computes the loss
-        """
-        return self.model(X)
-
-    def _compute_loss(self,Y,Yhat):
-        """
-        Computes the loss from the predicted output Yhat and output Y
-        """
-        return self.lossfcn(Yhat,Y)
-
-    def _backward(self,loss):
-        """ 
-        Performs one backward pass through the network and updates the parameters
-        of the model (for all learnable parameters)
-        """
-        loss.backward()
-        self.optimizer.step()
-
-    def _shuffle(self,X,Y,inds):
-        """
-        Shuffles the data in X and Y in place to avoid memory overhead 
-        """
-        np.random.shuffle(inds)
-        return X[inds,:],Y[inds,:]
-
-    def _toTensor(self,X):
-        """
-        converts a numpy array to a torch tensor and pushes to GPU if available
-        """
-        X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
-        X_tensor.to(self.device)
-        return X_tensor
-
-    def fit(self,X,Y,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
+    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
         """
         Trains the network on the training data X and Y, using a specific optimizer (SGD, Adam, etc.),
         learning rate alpha, L2 regularization value, and minibatch size
@@ -128,8 +70,13 @@ class dNN():
             Y :
                 a numpy array of size N x K, where N = training samples and K = size of output layer 
 
+            loss:
+                string for the loss function, of one of the following:
+                ['mse','l1','huber','kldiv','cross','loglikelihood','bce']
+
             optimizer :
-                an alias for a torch optimizing function (i.e. torch.nn.Adam, NOT torch.nn.Adam() )
+                the type of learning optimizer, of one of the following:
+                    ['adagrad', 'adadelta','adamax','adam','rms','sgd']
 
             alpha :
                 the learning rate for the optimizer. Default = 0.01
@@ -150,41 +97,26 @@ class dNN():
         -------
             costs :
                 a list of costs calulated every 100 iterations
-
-            ROC :
-                a 2 x 2 numpy array, as:
-                    [ [false positive %, false negative %],
-                      [true positive %, true negative %] ]
         """
 
         # check X, Y shapes and convert to tensors
-        N,D_in = X.shape
-        M,D_out = Y.shape
+        N, D_in = X.shape
+        M, D_out = Y.shape
         assert( N == M,'# of samples in X and Y do not match' )
         
-        shuffleInds = np.arange(N)
+        shuffleInds = range(N)
         X_tensor = self._toTensor(X)
         Y_tensor = self._toTensor(Y)    
         
-        # initialize the model parameters and optimizing function
-        self._initialize()
-        self.costs = np.zeros(nEpochs)    
-        self.optimizer = optimizer(self.model.parameters(),lr=alpha,weight_decay=regularization)
-        self.model.train() # sets model to training mode so we can update params
-      
-        # find the # of batches for this training set
-        nBatches = int(np.floor(N / batchSize))
-        extra = np.mod(N,batchSize)
-        batches = [batch*batchSize for batch in range(nBatches)]
-        if extra > 0:
-            batches.append(batches[-1]+extra)
-            nBatches += 1
+        # initialize the training regime and params
+        self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
+        nBatches = self.find_num_batches(N,batchSize)
 
         # --- epoch loop
         tic = time()
         for epoch in range(nEpochs):
             running_cost = 0
-            X_tensor,Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
+            X_tensor, Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
             
             # --- minibatch loop 
             for batch in range(nBatches-1):
@@ -195,10 +127,9 @@ class dNN():
 
                 # do one full pass through model
                 Yhat = self._forward(X_batch)
-                loss = self.lossfcn(Yhat,Y_batch) 
-                self._backward(loss)
+                self._backward(Y_batch,Yhat)
                   
-                running_cost += loss.item()
+                running_cost += self.loss.item()
 
             # store cost and print to screen 
             self.costs[epoch] = running_cost / nBatches
@@ -207,23 +138,146 @@ class dNN():
 
         print('Elapsed training time: ' + str(time() - tic) + ' seconds')
 
-    def predict(self,X):
+
+class sRNN(NNutils):
+    def __init__(self,layers,activations,bias=True,droppout=0.0):
         """
-        Predict the response to X from a forward pass through the network
+        Builds a (stacked) recurrent neural network with arbitrary # of stacked layers, units per layer, and activation functions per layer
+
+        Parameters:
+        ----------
+            layers :
+                A tuple or list of integers of length L, where L stands for the total # of layers (including input and outputs). 
+                Each element represents the # of OUTPUT dimensions for that layer; thus the expected input dimensions
+                sizes for each lth layer is computed as the # of output dimensions of the lth-1 layer. 
+
+                For the first layer (input layer), specify the input & ouput dimensions as: (inputDim, outputDim)
+
+                ex: layers = ((5,12), 5, 3, 1) builds a recurrent network with 4 stacked layers with the following I/O dimensions:
+                                    
+                                    input dims      output dims
+                        layer 1:        5               12
+                        layer 2:        12              5
+                        layer 3:        5               3
+                        layer 4:        3               1
+
+            activations :
+                A list of strings representing the rnn cell type for each layer in a stacked RNN (if layer > 1)
+                    'rnn' - vanilla recurrent network cell
+                    'lstm' - long short-term memory cell
+                    'gru' - gated recurrent unit cell
+
+                Default = ['lstm'] * len(layers)
+
+            bias :
+                a boolean flag for computing bias from the network layers
+                Default = true
+
+            droppout :
+                float between [0,1] indicating the probability of droppout for regularizing the RNN
+                Default = 0.0
+        """
+        self.L = len(layers)
+        model = OrderedDict()
+        for l in range(self.L):
+            if l == 0:
+                inSize, outSize = layers[l]
+            else:
+                inSize = layers[l-1][-1]
+                outSize = layers[l]
+
+            if activations[l] is 'rnn':
+                model[activations[l] + str(l+1)] = torch.nn.RNN(inSize,outSize,1)
+            elif activations[l] is 'lstm':
+                model[activations[l] + str(l+1)] = torch.nn.LSTM(inSize,outSize,1)
+            elif activations[l] is 'gru':
+                model[activations[l] + str(l+1)] = torch.nn.GRU(inSize,outSize,1)
+
+            #model['linear' + str(l+1)] = torch.nn.Linear(layers[l-1],layers[l])
+            #model['activation' + str(l+1)] = activations[l-1] # l-1 since input layer does not have an activation
+            
+            #if normalizeLayers and l != self.L-1:
+            #    model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
+
+        super().__init__(self,torch.nn.Sequential(model),type='rnn')
+
+    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
+        """
+        Trains the network on the training data X and Y, using a specific optimizer (SGD, Adam, etc.),
+        learning rate alpha, L2 regularization value, and minibatch size
 
         Parameters:
         ----------
             X :
-                a numpy array of size M x D, where M = samples and D = size of input layer
+                a numpy array of size N x D, where N = training samples and D = size of input layer
+
+            Y :
+                a numpy array of size N x K, where N = training samples and K = size of output layer 
+
+            loss:
+                string for the loss function, of one of the following:
+                ['mse','l1','huber','kldiv','cross','loglikelihood','bce']
+
+            optimizer :
+                the type of learning optimizer, of one of the following:
+                    ['adagrad', 'adadelta','adamax','adam','rms','sgd']
+
+            alpha :
+                the learning rate for the optimizer. Default = 0.01
+
+            regularization :
+                the weight decay for L2 regularization on the network. Default = 0
+
+            verbose :
+                a boolean flag for printing iterative costs to screen. Default = false
+
+            nEpochs :
+                an integer specifying the # of iterations for training. Default = 100
+
+            batchSize :
+                an integer specifying the # of training samples per batch
 
         Returns:
         -------
-            Yhat :
-                predicted responses of X of size M x K, where K = size of output layer
+            costs :
+                a list of costs calulated every 100 iterations
         """
 
-        self.model.eval() # avoids updating parameters 
-      
+        # check X, Y shapes and convert to tensors
+        N, D_in = X.shape
+        M, D_out = Y.shape
+        assert( N == M,'# of samples in X and Y do not match' )
+        
+        shuffleInds = range(N)
         X_tensor = self._toTensor(X)
-        Yhat = self._forward(X_tensor)
-        return Yhat.detach().to('cpu').numpy()
+        Y_tensor = self._toTensor(Y)    
+        
+        # initialize the training regime and params
+        self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
+        nBatches = self.find_num_batches(N,batchSize)
+
+        # --- epoch loop
+        tic = time()
+        for epoch in range(nEpochs):
+            running_cost = 0
+            X_tensor, Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
+            
+            # --- minibatch loop 
+            for batch in range(nBatches-1):
+                self.optimizer.zero_grad() # resets gradients to avoid accumulation
+                indicies = torch.tensor(range(batches[batch], batches[batch+1]))
+                X_batch = torch.index_select(X_tensor,0,indicies) 
+                Y_batch = torch.index_select(Y_tensor,0,indicies)
+
+                # do one full pass through model
+                Yhat = self._forward(X_batch)
+                self._backward(Y_batch,Yhat)
+                  
+                running_cost += self.loss.item()
+
+            # store cost and print to screen 
+            self.costs[epoch] = running_cost / nBatches
+            if verbose:
+                print('cost is: ' + str(self.costs[epoch]))
+
+        print('Elapsed training time: ' + str(time() - tic) + ' seconds')
