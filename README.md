@@ -5,7 +5,7 @@ JStorch provides even higher-level abstraction for building networks via pytorch
 
 Models include:
 
-[X] DNN - a modular architecture for building a sequential deep NN with 1D inputs. 
-[x] sRNN - stacked recurrent neural networks
-[ ] sRNN-LM - stacked recurrent networks with linear models (MLP) for state prediction
-[ ] CNN - convolutional net
+[X] DNN - a modular architecture for building a sequential deep NN with 1D inputs.\\ 
+[x] sRNN - stacked recurrent neural networks\\
+[ ] sRNN-LM - stacked recurrent networks with linear models (MLP) for state prediction\\
+[ ] CNN - convolutional net\\
