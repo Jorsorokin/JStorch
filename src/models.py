@@ -45,9 +45,7 @@ class DNN(utils.NN):
                 Each strings must be of one of the following:
                     ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
         """
-        self.L = len(layers)
         model = utils.buildMLP(model,layers,activations)
-        
         super().__init__(self,torch.nn.Sequential(model),type='dnn') 
 
     def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
@@ -184,22 +182,10 @@ class RNN(utils.NN):
                 results in a dropout layer following each RNN layer, with P(dropout_i) = dropout 
                 Default = 0.0
         """
-        self.L = len(layers)
-        model = OrderedDict()
-        for l in range(self.L):
-            if l == 0:
-                inSize, outSize = layers[l]
-            else:
-                inSize = layers[l-1][-1]
-                outSize = layers[l]
-
-            model[rnnType[l] + str(l+1)] = gettatr(torch.nn,rnnType[l])(inSize,outSize,1)
-            if droppout > 0.0:
-                model['dropout' + str(l+1)] = torch.nn.Dropout(dropout)
+        model = buildRNN(layers, rnnType, dropout)
 
         if outputDims is not None:
-            layers = layers[-1]
-            layers.append(outputDims)
+            layers = [layers[-1]].append(outputDims)
             model.update(utils.buildMLP(layers,activations))
 
         super().__init__(self,torch.nn.Sequential(model),type='rnn')

@@ -13,7 +13,6 @@ def plot(model):
     # visualize the model layers as a graph
     pass
 
-
 #####################################################################
 # UTILITY FUNCTIONS
 #####################################################################
@@ -24,8 +23,8 @@ def buildMLP(layers,activations,):
     Parameters:
     ----------
         layers :
-            list of ints specifying the sizes of the layers for the network, including the "input" layer (the expected
-            size of the input)
+            list or tuple of ints specifying the sizes of the layers for the network, 
+            including the "input" layer (the expected size of the input)
 
         activations :
             list of activation functions for each layer (see documentation under models.DNN)
@@ -47,6 +46,38 @@ def buildMLP(layers,activations,):
 
     return model
 
+def buildRNN(layers,cellType,dropout):
+    """
+    builds a stacked recurrent neural network with user-specifying RNN cells at each layer
+
+    Parameters:
+    ----------
+        layers :
+            list or tuple of ints specifying the sizes of the layers for the network, 
+            including the "input" layer (the expected size of the input)
+
+        cellTypes :
+            a list of strings specifying the the types of recurrent networks for each layer
+            Must be either 'RNN', 'LSTM', or 'GRU'
+
+        dropout :
+            a fload between [0,1] specifying dropout probability for the RNN layers. 
+            If dropout > 0, no dropout layer will be added
+    """
+    model = OrderedDict()
+    L = len(layers)
+
+    for l in range(L):
+        if l == 0:
+            inSize, outSize = layers[l]
+        else:
+            inSize = layers[l-1][-1]
+
+        model[cellType[l] + str(l+1)] = gettatr(torch.nn,cellType[l])(inSize,outSize,1)
+        if droppout > 0:
+            model['dropout' + str(l+1)] = torch.nn.Dropout(dropout)
+
+    return model
 
 def find_num_batches(N,batchSize):
     """
