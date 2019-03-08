@@ -22,10 +22,9 @@ import numpy as np
 import torch, utils
 from collections import OrderedDict
 from time import time
-from utils import NNutils
 
-class DNN(NNutils):
-    def __init__(self,layers,activations,normalizeLayers=True):
+class DNN(utils.NN):
+    def __init__(self,layers,activations):
         """
         Build a deep neural network with arbitrary # of layers & units, and varied activation functions per layer
 
@@ -42,20 +41,10 @@ class DNN(NNutils):
                 A list of strings of activation functions for the layers, of length L - 1. 
                 Each strings must be of one of the following:
                     ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
-
-            normalizeLayers :
-                a boolean flag for normalizing hidden layers. If true, each layer will be normalized via batch normalization.
-                Default = True
         """
         self.L = len(layers)
-        model = OrderedDict()
-        for l in range(1,self.L):
-            model['linear' + str(l)] = torch.nn.Linear(layers[l-1],layers[l])
-            model['activation' + str(l)] = getattr(torch.nn,activations[l-1]) # l-1 since input layer does not have an activation
-            if normalizeLayers and l != self.L-1:
-                model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
-
-        # initialize model and parameters
+        model = utils.buildMLP(model,layers,activations)
+        
         super().__init__(self,torch.nn.Sequential(model),type='dnn') 
 
     def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
@@ -73,7 +62,7 @@ class DNN(NNutils):
 
             loss:
                 string for the loss function, of one of the following:
-                ['mse','l1','huber','kldiv','cross','llh','bce']
+                ['l2','l1','huber','kldiv','cross','llh','bce']
 
             optimizer :
                 the type of learning optimizer, of one of the following:
@@ -111,13 +100,13 @@ class DNN(NNutils):
         
         # initialize the training regime and params
         self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
-        nBatches = self.find_num_batches(N,batchSize)
+        nBatches = utils.find_num_batches(N,batchSize)
 
         # --- epoch loop
         tic = time()
         for epoch in range(nEpochs):
             running_cost = 0
-            X_tensor, Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
+            X_tensor, Y_tensor = utils.shuffle(X_tensor,Y_tensor,shuffleInds)
             
             # --- minibatch loop 
             for batch in range(nBatches-1):
@@ -140,10 +129,12 @@ class DNN(NNutils):
         print('Elapsed training time: ' + str(time() - tic) + ' seconds')
 
 
-class sRNN(NNutils):
-    def __init__(self,layers,activations,bias=True,droppout=0.0):
+class RNN(utils.NN):
+    def __init__(self,layers,rnnType,outputDims=None,activations=None,bias=True,dropout=0.0):
         """
-        Builds a (stacked) recurrent neural network with arbitrary # of stacked layers, units per layer, and activation functions per layer
+        Builds a (stacked) recurrent neural network with arbitrary # of stacked layers, units per layer, and rnn type per layer.
+        One can also add a final MLP as an output, which can be useful for classifying time series into groups or 
+        producing a forecast of future values given the RNN hidden states
 
         Parameters:
         ----------
@@ -162,18 +153,32 @@ class sRNN(NNutils):
                         layer 3:        5               3
                         layer 4:        3               1
 
-            activations :
+            rnnType :
                 A list of strings representing the rnn cell type for each layer in a stacked RNN (if layer > 1)
                     'RNN' - vanilla recurrent network cell
                     'LSTM' - long short-term memory cell
                     'GRU' - gated recurrent unit cell
+            
+            outputDims :
+                List of integers. If not None, the final output layer of the network is an MLP, with the # of 
+                inputs equal to the # of dims of the final RNN layer, and the # of outputs equal to outputDim. 
+                Default = None
+
+            activations :
+                A list of strings for the output MLP activation functions (only used if outputDim > 0).
+
+                Each string must be of one of the following:
+                    ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
+
+                Default = None
 
             bias :
                 a boolean flag for computing bias from the network layers
-                Default = true
+                Default = True
 
-            droppout :
-                float between [0,1] indicating the probability of droppout for regularizing the RNN
+            dropout :
+                float between [0,1] indicating the probability of dropout for regularizing the RNN. Any float > 0.0 
+                results in a dropout layer following each RNN layer, with P(dropout_i) = dropout 
                 Default = 0.0
         """
         self.L = len(layers)
@@ -185,23 +190,16 @@ class sRNN(NNutils):
                 inSize = layers[l-1][-1]
                 outSize = layers[l]
 
-            model[activations[l] + str(l+1)] = gettatr(torch.nn,activations[l])(inSize,outSize,1)
-            
+            model[rnnType[l] + str(l+1)] = gettatr(torch.nn,rnnType[l])(inSize,outSize,1)
+            if droppout > 0.0:
+                model['dropout' + str(l+1)] = torch.nn.Dropout(dropout)
+
+        if outputDims is not None:
+            layers = layers[-1]
+            layers.append(outputDims)
+            model.update(utils.buildMLP(layers,activations))
+
         super().__init__(self,torch.nn.Sequential(model),type='rnn')
-
-
-            # if activations[l] is 'rnn':
-            #     model[activations[l] + str(l+1)] = torch.nn.RNN(inSize,outSize,1)
-            # elif activations[l] is 'lstm':
-            #     model[activations[l] + str(l+1)] = torch.nn.LSTM(inSize,outSize,1)
-            # elif activations[l] is 'gru':
-            #     model[activations[l] + str(l+1)] = torch.nn.GRU(inSize,outSize,1)
-
-            #model['linear' + str(l+1)] = torch.nn.Linear(layers[l-1],layers[l])
-            #model['activation' + str(l+1)] = activations[l-1] # l-1 since input layer does not have an activation
-            
-            #if normalizeLayers and l != self.L-1:
-            #    model['normalization' + str(l)] = torch.nn.BatchNorm1d(layers[l])
 
     def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
         """
@@ -218,7 +216,7 @@ class sRNN(NNutils):
 
             loss:
                 string for the loss function, of one of the following:
-                ['mse','l1','huber','kldiv','cross','llh','bce']
+                ['l2','l1','huber','kldiv','cross','llh','bce']
 
             optimizer :
                 the type of learning optimizer, of one of the following:
@@ -256,13 +254,13 @@ class sRNN(NNutils):
         
         # initialize the training regime and params
         self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
-        nBatches = self.find_num_batches(N,batchSize)
+        nBatches = utils.find_num_batches(N,batchSize)
 
         # --- epoch loop
         tic = time()
         for epoch in range(nEpochs):
             running_cost = 0
-            X_tensor, Y_tensor = self._shuffle(X_tensor,Y_tensor,shuffleInds)
+            X_tensor, Y_tensor = utils.shuffle(X_tensor,Y_tensor,shuffleInds)
             
             # --- minibatch loop 
             for batch in range(nBatches-1):

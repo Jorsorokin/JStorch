@@ -7,8 +7,6 @@ Models include:
 
 [X] DNN - a modular architecture for building a sequential deep NN with 1D inputs.
 
-[x] sRNN - stacked recurrent neural networks
-
-[ ] sRNN-LM - stacked recurrent networks with linear models (MLP) for state prediction
+[x] RNN - stacked recurrent neural network, with optional MLP as final stacked network
 
 [ ] CNN - convolutional net

@@ -4,20 +4,84 @@ series of utilities for torch model learning
 
 import numpy as np
 import torch
+from collections import OrderedDict
 
 #####################################################################
 # PLOTTING FUNCTIONS
 #####################################################################
-
 def plot(model):
     # visualize the model layers as a graph
     pass
 
 
 #####################################################################
-# Training utility functions
+# UTILITY FUNCTIONS
 #####################################################################
-class NNutils():
+def buildMLP(layers,activations,):
+    """
+    builds a dense MLP using the provided activation functions and layer sizes
+
+    Parameters:
+    ----------
+        layers :
+            list of ints specifying the sizes of the layers for the network, including the "input" layer (the expected
+            size of the input)
+
+        activations :
+            list of activation functions for each layer (see documentation under models.DNN)
+    
+    Returns:
+    -------
+        model :
+            an OrderedDict() containing initiated Linear layers. All layers minus the output layer will be 
+            normalized via BatchNorm1d
+    """
+
+    model = OrderedDict()
+    nLayers = len(layers)
+    for l in range(nLayers):
+        model['linear' + str(l+1)] = torch.nn.Linear(layers[l],layers[l+1])
+        model['activation' + str(l+1)] = getattr(torch.nn,activations[l]) # l-1 since input layer does not have an activation
+        if l != nLayers-1:
+            model['normalization' + str(l+1)] = torch.nn.BatchNorm1d(layers[l+1])
+
+    return model
+
+
+def find_num_batches(N,batchSize):
+    """
+    determines the # of batches for training
+
+    Parameters:
+    ----------
+        N :
+            integer, the # of training samples
+
+        batchSize :
+            integer, the desired size of each training batch
+    """
+    nBatches = int(np.floor(N / batchSize))
+    extra = np.mod(N,batchSize)
+    batches = [batch*batchSize for batch in range(nBatches)]
+    if extra > 0:
+        batches.append(batches[-1]+extra)
+        nBatches += 1
+
+    return nBatches
+
+
+def shuffle(X,Y,inds):
+    """
+    Shuffles the data in X and Y in place to avoid memory overhead 
+    """
+    np.random.shuffle(inds)
+    return X[inds,:],Y[inds,:]
+
+
+#####################################################################
+# GENERIC NETWORK CLASS
+#####################################################################
+class NN():
     """
     A generic class containing initialization and training methods used across various
     neural network architectures (deep sequential, recurrent, ...) in "model.py". The methods are 
@@ -49,26 +113,29 @@ class NNutils():
 
         self._initialize_params()
 
+    ##########################
+    # PRIVATE METHODS
+    ##########################
     def _initialize_params(self):
         """
         Initializes all parameters in the model
         """
+        params = self.model.state_dict()
+        for param in params.keys():    
+            if 'weight' in param:
+                torch.nn.init.normal_(params[param]) / sqrt(params[param].shape[0])
+            elif 'bias' in param:
+                torch.nn.init.constant_(params[param],0)
+
+        self.model.load_state_dict(params) # re-supply the initialized params
         self.costs = None
-
-        if self.type is 'dnn':
-            params = self.model.state_dict()
-            for param in params.keys():
-                if 'weight' in param:
-                    torch.nn.init.normal_(params[param]) / sqrt(params[param].shape[0])
-                elif 'bias' in param:
-                    torch.nn.init.constant_(params[param],0)
-
-            self.model.load_state_dict(params) # re-supply the initialized params
 
     def _get_optimizer(self,optimizer,alpha,regularization):
         """
         initiates the optimizing function based on user input
         """
+        optimizer = optimizer.lower()
+
         if optimizer is 'adadelta':
             fcn = torch.optim.Adadelta
         elif optimizer is 'adagrad':
@@ -88,7 +155,9 @@ class NNutils():
         """
         initializes the loss function
         """
-        if loss is 'mse':
+        loss = loss.lower()
+
+        if loss is 'l2':
             return torch.nn.MSELoss
         elif loss is 'l1':
             return torch.nn.L1Loss
@@ -111,25 +180,38 @@ class NNutils():
         self.optimizer = self._get_optimizer(optimizer,alpha,regularization)
         self.loss = self._get_loss(loss)
         self.model.train() # sets model to training mode so we can update params
-    
+
+    def _forward(self,X):
+        """ 
+        Perform one forward pass of the model and computes the loss
+        """
+        self.model(X)
+
+    def _backward(self,Y,Yhat):
+        """ 
+        Performs one backward pass through the network and updates the parameters
+        of the model (for all learnable parameters)
+        """
+        self.loss(Y,Yhat)
+        self.loss.backward()
+        self.optimizer.step()
+
+    def _toTensor(self,X):
+        """
+        converts a numpy array to a torch tensor and pushes to GPU if available
+        """
+        X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
+        X_tensor.to(self.device)
+        return X_tensor
+
+    ##########################
+    # PUBLIC METHODS
+    ##########################
     def forget(self):
         """
         re-initializes parameters and costs (forgets learning)
         """
         self._initialize_params()
-
-    def find_num_batches(self,N,batchSize):
-        """
-        determines the # of batches for training
-        """
-        nBatches = int(np.floor(N / batchSize))
-        extra = np.mod(N,batchSize)
-        batches = [batch*batchSize for batch in range(nBatches)]
-        if extra > 0:
-            batches.append(batches[-1]+extra)
-            nBatches += 1
-
-        return nBatches
 
     def predict(self,X):
         """
@@ -151,33 +233,3 @@ class NNutils():
         X_tensor = self._toTensor(X)
         Yhat = self._forward(X_tensor)
         return Yhat.detach().to('cpu').numpy()
-
-    def _forward(self,X):
-        """ 
-        Perform one forward pass of the model and computes the loss
-        """
-        self.model(X)
-
-    def _backward(self,Y,Yhat):
-        """ 
-        Performs one backward pass through the network and updates the parameters
-        of the model (for all learnable parameters)
-        """
-        self.loss(Y,Yhat)
-        self.loss.backward()
-        self.optimizer.step()
-
-    def _shuffle(self,X,Y,inds):
-        """
-        Shuffles the data in X and Y in place to avoid memory overhead 
-        """
-        np.random.shuffle(inds)
-        return X[inds,:],Y[inds,:]
-
-    def _toTensor(self,X):
-        """
-        converts a numpy array to a torch tensor and pushes to GPU if available
-        """
-        X_tensor = torch.from_numpy(X).type(torch.FloatTensor)
-        X_tensor.to(self.device)
-        return X_tensor
