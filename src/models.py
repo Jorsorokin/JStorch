@@ -6,9 +6,11 @@ The models below are wrappers around native pytorch modules, in an attempt to ab
 
 Included below are:
 
-dNN - a simple sequential deep neural network, with arbitrary # of layers, 
+DNN - a simple sequential deep neural network, with arbitrary # of layers, 
       units per layer, activation functions, and loss function
 
+RNN - a (stacked) recurrent network, with arbitrary # of RNN layers (user defined), and an 
+      option to add a final MLP output layer
 
 Written by Jordan Sorokin
 
@@ -16,6 +18,7 @@ Change Log:
 5/1/18 - finished DNN architecture
 3/5/19 - updated class structure to inherit training utilities from NNutils superclass
 3/6/19 - working on stacked RNN model architecture (perhaps make RNN its own class?)
+3/7/19 - finished RNN architecture; allows for stacking and final MLP output layer
 """
 
 import numpy as np
