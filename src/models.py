@@ -22,9 +22,10 @@ Change Log:
 """
 
 import numpy as np
-import torch, utils
+import torch
 from collections import OrderedDict
 from time import time
+from src import utils
 
 class DNN(utils.NN):
     def __init__(self,layers,activations):
@@ -45,10 +46,10 @@ class DNN(utils.NN):
                 Each strings must be of one of the following:
                     ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
         """
-        model = utils.buildMLP(model,layers,activations)
-        super().__init__(self,torch.nn.Sequential(model),type='dnn') 
+        model = utils.buildMLP(layers,activations)
+        super().__init__(torch.nn.Sequential(model),nnType='dnn') 
 
-    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
+    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128,tolerance=1e-6):
         """
         Trains the network on the training data X and Y, using a specific optimizer (SGD, Adam, etc.),
         learning rate alpha, L2 regularization value, and minibatch size
@@ -84,16 +85,14 @@ class DNN(utils.NN):
             batchSize :
                 an integer specifying the # of training samples per batch
 
-        Returns:
-        -------
-            costs :
-                a list of costs calulated every 100 iterations
+            tolerance :
+                float specifying the tolerance for the change in error for early stopping. Default = 1e-6                
         """
 
         # check X, Y shapes and convert to tensors
         N, D_in = X.shape
         M, D_out = Y.shape
-        assert( N == M,'# of samples in X and Y do not match' )
+        assert N == M,'# of samples in X and Y do not match'
         
         shuffleInds = range(N)
         X_tensor = self._toTensor(X)
@@ -101,7 +100,7 @@ class DNN(utils.NN):
         
         # initialize the training regime and params
         self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
-        nBatches = utils.find_num_batches(N,batchSize)
+        nBatches, batches = utils.find_num_batches(N,batchSize)
 
         # --- epoch loop
         tic = time()
@@ -126,12 +125,15 @@ class DNN(utils.NN):
             self.costs[epoch] = running_cost / nBatches
             if verbose:
                 print('cost is: ' + str(self.costs[epoch]))
+            
+            if self.costs[epoch] - self.costs[epoch-1] < tolerance:
+                break
 
         print('Elapsed training time: ' + str(time() - tic) + ' seconds')
 
 
 class RNN(utils.NN):
-    def __init__(self,layers,rnnType,outputDims=None,activations=None,bias=True,dropout=0.0):
+    def __init__(self,layers,rnnType,outputDims=None,activations=None,dropout=0.0):
         """
         Builds a (stacked) recurrent neural network with arbitrary # of stacked layers, units per layer, and rnn type per layer.
         One can also add a final MLP as an output, which can be useful for classifying time series into groups or 
@@ -173,24 +175,20 @@ class RNN(utils.NN):
 
                 Default = None
 
-            bias :
-                a boolean flag for computing bias from the network layers
-                Default = True
-
             dropout :
                 float between [0,1] indicating the probability of dropout for regularizing the RNN. Any float > 0.0 
                 results in a dropout layer following each RNN layer, with P(dropout_i) = dropout 
                 Default = 0.0
         """
-        model = buildRNN(layers, rnnType, dropout)
-
+        model = utils.buildRNN(layers, rnnType, dropout)
+        super().__init__(torch.nn.Sequential(model),nnType='rnn')
+        
         if outputDims is not None:
-            layers = [layers[-1]].append(outputDims)
-            model.update(utils.buildMLP(layers,activations))
+            mlp = DNN(outputDims,activations)
+            self.update(mlp.model)
+            self.nnType = 'rnn-mlp'
 
-        super().__init__(self,torch.nn.Sequential(model),type='rnn')
-
-    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,batchSize=128):
+    def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,seqLength=128,batchSize=10,tolerance=1e-6):
         """
         Trains the network on the training data X and Y, using a specific optimizer (SGD, Adam, etc.),
         learning rate alpha, L2 regularization value, and minibatch size
@@ -223,8 +221,14 @@ class RNN(utils.NN):
             nEpochs :
                 an integer specifying the # of iterations for training. Default = 100
 
+            seqLength :
+                an integer specifying the length of each training sequence. Default = 128
+
             batchSize :
-                an integer specifying the # of training samples per batch
+                an integer specifying the # of training samples per batch. Default = 10
+
+            tolerance :
+                float specifying the tolerance for the change in error for early stopping. Default = 1e-6
 
         Returns:
         -------
@@ -235,28 +239,33 @@ class RNN(utils.NN):
         # check X, Y shapes and convert to tensors
         N, D_in = X.shape
         M, D_out = Y.shape
-        assert( N == M,'# of samples in X and Y do not match' )
-        
-        shuffleInds = range(N)
-        X_tensor = self._toTensor(X)
-        Y_tensor = self._toTensor(Y)    
+        assert N == M,'# of samples in X and Y do not match'
         
         # initialize the training regime and params
         self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
-        nBatches = utils.find_num_batches(N,batchSize)
+        nSequences, sequences, extra = utils.find_num_batches(N,seqLength)
+        X = np.append(X,np.expand_dims(np.zeros((extra,D_in)),1))
+        X = np.append(X,np.expand_dims(np.zeros((extra,D_out)),1))
+
+        # if extra > 0:
+        #     nSequences -= 1
+        #     sequences = sequences[:-2]
+
+        nBatches, batches, _ = utils.find_num_batches(nSequences,batchSize)
+        X_tensor = self._toTensor(X).reshape(seqLength,nSequences,D_in)
+        Y_tensor = self._toTensor(Y).reshape(seqLength,nSequences,D_out)
 
         # --- epoch loop
         tic = time()
         for epoch in range(nEpochs):
             running_cost = 0
-            X_tensor, Y_tensor = utils.shuffle(X_tensor,Y_tensor,shuffleInds)
             
             # --- minibatch loop 
             for batch in range(nBatches-1):
                 self.optimizer.zero_grad() # resets gradients to avoid accumulation
                 indicies = torch.tensor(range(batches[batch], batches[batch+1]))
-                X_batch = torch.index_select(X_tensor,0,indicies) 
-                Y_batch = torch.index_select(Y_tensor,0,indicies)
+                X_batch = torch.index_select(X_tensor,1,indicies) 
+                Y_batch = torch.index_select(Y_tensor,1,indicies)
 
                 # do one full pass through model
                 Yhat = self._forward(X_batch)
@@ -268,5 +277,8 @@ class RNN(utils.NN):
             self.costs[epoch] = running_cost / nBatches
             if verbose:
                 print('cost is: ' + str(self.costs[epoch]))
+
+            if self.costs[epoch] - self.costs[epoch-1] < tolerance:
+                break
 
         print('Elapsed training time: ' + str(time() - tic) + ' seconds')

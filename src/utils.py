@@ -16,7 +16,7 @@ def plot(model):
 #####################################################################
 # UTILITY FUNCTIONS
 #####################################################################
-def buildMLP(layers,activations,):
+def buildMLP(layers,activations):
     """
     builds a dense MLP using the provided activation functions and layer sizes
 
@@ -38,10 +38,10 @@ def buildMLP(layers,activations,):
 
     model = OrderedDict()
     nLayers = len(layers)
-    for l in range(nLayers):
+    for l in range(nLayers-1):
         model['linear' + str(l+1)] = torch.nn.Linear(layers[l],layers[l+1])
-        model['activation' + str(l+1)] = getattr(torch.nn,activations[l]) # l-1 since input layer does not have an activation
-        if l != nLayers-1:
+        model['activation' + str(l+1)] = getattr(torch.nn,activations[l])()
+        if l < nLayers-2:
             model['normalization' + str(l+1)] = torch.nn.BatchNorm1d(layers[l+1])
 
     return model
@@ -71,12 +71,34 @@ def buildRNN(layers,cellType,dropout):
         if l == 0:
             inSize, outSize = layers[l]
         else:
-            inSize = layers[l-1][-1]
+            inSize = layers[l-1]
+            outSize = layers[l]
+            if type(inSize) is tuple or type(inSize) is list:
+                inSize = inSize[-1]
 
-        model[cellType[l] + str(l+1)] = gettatr(torch.nn,cellType[l])(inSize,outSize,1)
-        if droppout > 0:
-            model['dropout' + str(l+1)] = torch.nn.Dropout(dropout)
+        model[cellType[l] + str(l+1)] = getattr(torch.nn,cellType[l]+'Cell')(inSize,outSize,True)
+        if l < L-1 and dropout > 0:
+            model['Dropout' + str(l+1)] = torch.nn.Dropout(dropout)
 
+    return model
+
+def set_initial_conditions(model):
+    """
+    initializes all weights to random normal and biases to 0
+
+    Params:
+    ------
+        model :
+            a torch.nn.Sequential model
+    """
+    params = model.state_dict()
+    for param in params.keys():    
+        if 'weight' in param:
+            torch.nn.init.normal_(params[param]) / np.sqrt(params[param].shape[0])
+        elif 'bias' in param:
+            torch.nn.init.constant_(params[param],0)
+
+    model.load_state_dict(params)
     return model
 
 def find_num_batches(N,batchSize):
@@ -95,11 +117,10 @@ def find_num_batches(N,batchSize):
     extra = np.mod(N,batchSize)
     batches = [batch*batchSize for batch in range(nBatches)]
     if extra > 0:
-        batches.append(batches[-1]+extra)
+        batches.append(batches[-1]+batchSize+extra)
         nBatches += 1
 
-    return nBatches
-
+    return nBatches, batches, extra
 
 def shuffle(X,Y,inds):
     """
@@ -129,44 +150,38 @@ class NN():
         initialized parameters and generic learning methods 
     """
 
-    def __init__(self,model,nnType='dnn'):
+    def __init__(self,model,nnType):
         """
         establishes link to defined model and pushes to GPU if possible
         """
         self.model = model
         self.type = nnType
-
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-            self.model.cuda()
-        else:
-            self.device = torch.device('cpu')
-
         self._initialize_params()
 
-    ##########################
     # PRIVATE METHODS
     ##########################
     def _initialize_params(self):
         """
         Initializes all parameters in the model
         """
-        params = self.model.state_dict()
-        for param in params.keys():    
-            if 'weight' in param:
-                torch.nn.init.normal_(params[param]) / sqrt(params[param].shape[0])
-            elif 'bias' in param:
-                torch.nn.init.constant_(params[param],0)
-
-        self.model.load_state_dict(params) # re-supply the initialized params
+        self.model = set_initial_conditions(self.model)
+        self._push_to_cuda()
         self.costs = None
+
+    def _push_to_cuda(self):
+        """
+        allows for GPU computation if GPU available
+        """
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+            self.model.cuda()
+        else:
+            self.device = torch.device('cpu')
 
     def _get_optimizer(self,optimizer,alpha,regularization):
         """
         initiates the optimizing function based on user input
         """
-        optimizer = optimizer.lower()
-
         if optimizer is 'adadelta':
             fcn = torch.optim.Adadelta
         elif optimizer is 'adagrad':
@@ -186,8 +201,6 @@ class NN():
         """
         initializes the loss function
         """
-        loss = loss.lower()
-
         if loss is 'l2':
             return torch.nn.MSELoss
         elif loss is 'l1':
@@ -235,7 +248,6 @@ class NN():
         X_tensor.to(self.device)
         return X_tensor
 
-    ##########################
     # PUBLIC METHODS
     ##########################
     def forget(self):
@@ -243,6 +255,13 @@ class NN():
         re-initializes parameters and costs (forgets learning)
         """
         self._initialize_params()
+
+    def update(self,model):
+        """
+        updates the torch model in "self.model" by appending a new model
+        as the last "layer" in the current model
+        """
+        self.model = torch.nn.Sequential(*list(self.model.children()),*list(model.children()))
 
     def predict(self,X):
         """
