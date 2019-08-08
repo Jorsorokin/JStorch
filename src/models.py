@@ -9,7 +9,7 @@ Included below are:
 DNN - a simple sequential deep neural network, with arbitrary # of layers, 
       units per layer, activation functions, and loss function
 
-RNN - a (stacked) recurrent network, with arbitrary # of RNN layers (user defined), and an 
+RNN - a (stacked) recurrent network, with arbitrary # of RNN layers, and an 
       option to add a final MLP output layer
 
 Written by Jordan Sorokin
@@ -18,7 +18,8 @@ Change Log:
 5/1/18 - finished DNN architecture
 3/5/19 - updated class structure to inherit training utilities from NNutils superclass
 3/6/19 - working on stacked RNN model architecture (perhaps make RNN its own class?)
-3/7/19 - finished RNN architecture; allows for stacking and final MLP output layer
+3/7/19 - finished RNN architecture; allows stacking and final MLP output layer
+3/10/19 - ported grunt work to "utils.py" via generic "NN" class; simplifies new model creation and improves generalization
 """
 
 import numpy as np
@@ -133,7 +134,7 @@ class DNN(utils.NN):
 
 
 class RNN(utils.NN):
-    def __init__(self,layers,rnnType,outputDims=None,activations=None,dropout=0.0):
+    def __init__(self,layers,rnnType,outputDim=None,activation=None,dropout=0.0):
         """
         Builds a (stacked) recurrent neural network with arbitrary # of stacked layers, units per layer, and rnn type per layer.
         One can also add a final MLP as an output, which can be useful for classifying time series into groups or 
@@ -162,17 +163,14 @@ class RNN(utils.NN):
                     'LSTM' - long short-term memory cell
                     'GRU' - gated recurrent unit cell
             
-            outputDims :
-                List of integers. If not None, the final output layer of the network is an MLP, with the # of 
+            outputDim :
+                int or None; If not None, the final output layer of the network is an MLP, with the # of 
                 inputs equal to the # of dims of the final RNN layer, and the # of outputs equal to outputDim. 
                 Default = None
 
-            activations :
-                A list of strings for the output MLP activation functions (only used if outputDim > 0).
-
-                Each string must be of one of the following:
+            activation :
+                string specifying the mlp activation function...must be of one of the following:
                     ['ELU','ReLU','LeakyReLU','PReLU','Sigmoid','LogSigmoid','Tanh','Softplus','Softmax','LogSoftmax']
-
                 Default = None
 
             dropout :
@@ -181,11 +179,10 @@ class RNN(utils.NN):
                 Default = 0.0
         """
         model = utils.buildRNN(layers, rnnType, dropout)
-        super().__init__(torch.nn.Sequential(model),nnType='rnn')
+        super().__init__(torch.nn.Sequential(model), nnType='rnn')
         
-        if outputDims is not None:
-            mlp = DNN(outputDims,activations)
-            self.update(mlp.model)
+        if outputDim is not None:
+            self.update(DNN([layers[-1],outputDim], [activation]).model)
             self.nnType = 'rnn-mlp'
 
     def fit(self,X,Y,loss,optimizer,alpha=0.01,regularization=0,verbose=False,nEpochs=100,seqLength=128,batchSize=10,tolerance=1e-6):
@@ -196,7 +193,7 @@ class RNN(utils.NN):
         Parameters:
         ----------
             X :
-                a numpy array of size N x D, where N = training samples and D = size of input layer
+                a numpy array of size N x D, where N = training samples and D = size of input layer (# features)
 
             Y :
                 a numpy array of size N x K, where N = training samples and K = size of output layer 
@@ -245,11 +242,7 @@ class RNN(utils.NN):
         self._initialize_training(nEpochs,optimizer,alpha,regularization,loss)  
         nSequences, sequences, extra = utils.find_num_batches(N,seqLength)
         X = np.append(X,np.expand_dims(np.zeros((extra,D_in)),1))
-        X = np.append(X,np.expand_dims(np.zeros((extra,D_out)),1))
-
-        # if extra > 0:
-        #     nSequences -= 1
-        #     sequences = sequences[:-2]
+        Y = np.append(Y,np.expand_dims(np.zeros((extra,D_out)),1))
 
         nBatches, batches, _ = utils.find_num_batches(nSequences,batchSize)
         X_tensor = self._toTensor(X).reshape(seqLength,nSequences,D_in)

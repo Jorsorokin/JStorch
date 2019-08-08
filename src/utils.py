@@ -76,7 +76,7 @@ def buildRNN(layers,cellType,dropout):
             if type(inSize) is tuple or type(inSize) is list:
                 inSize = inSize[-1]
 
-        model[cellType[l] + str(l+1)] = getattr(torch.nn,cellType[l]+'Cell')(inSize,outSize,True)
+        model[cellType[l] + str(l+1)] = getattr(torch.nn,cellType[l]+'Cell')(inSize, outSize, True)
         if l < L-1 and dropout > 0:
             model['Dropout' + str(l+1)] = torch.nn.Dropout(dropout)
 
@@ -116,6 +116,7 @@ def find_num_batches(N,batchSize):
     nBatches = int(np.floor(N / batchSize))
     extra = np.mod(N,batchSize)
     batches = [batch*batchSize for batch in range(nBatches)]
+
     if extra > 0:
         batches.append(batches[-1]+batchSize+extra)
         nBatches += 1
@@ -154,8 +155,28 @@ class NN():
         """
         establishes link to defined model and pushes to GPU if possible
         """
+        nn = torch.nn
+        optim = torch.optim 
+
         self.model = model
         self.type = nnType
+        self._optimFcns = { 'adadelta'  : optim.Adadelta, 
+                            'adagrad'   : optim.Adagrad,
+                            'adamax'    : optim.Adamax,
+                            'adam'      : optim.Adam,
+                            'rms'       : optim.RMSprop,
+                            'sgd'       : optim.SGD 
+                        }
+
+        self._lossFcns = {  'l2'        : nn.MSELoss,
+                            'l1'        : nn.L1Loss,
+                            'cross'     : nn.CrossEntropyLoss,
+                            'llh'       : nn.NLLLoss,
+                            'kldiv'     : nn.KLDivLoss,
+                            'bce'       : nn.BCELoss,
+                            'huber'     : nn.SmoothL1Loss
+                        }
+
         self._initialize_params()
 
     # PRIVATE METHODS
@@ -167,6 +188,15 @@ class NN():
         self.model = set_initial_conditions(self.model)
         self._push_to_cuda()
         self.costs = None
+
+    def _initialize_training(self,nEpochs,optimizer,alpha,regularization,loss):
+        """
+        initializes optimizer, cost, and loss function for training
+        """  
+        self.costs = np.zeros(nEpochs)
+        self.optimizer = self._get_optimizer(optimizer,alpha,regularization)
+        self.loss = self._get_loss(loss)
+        self.model.train() # sets model to training mode so we can update params
 
     def _push_to_cuda(self):
         """
@@ -180,50 +210,17 @@ class NN():
 
     def _get_optimizer(self,optimizer,alpha,regularization):
         """
-        initiates the optimizing function based on user input
+        initiates the optimizing function
         """
-        if optimizer is 'adadelta':
-            fcn = torch.optim.Adadelta
-        elif optimizer is 'adagrad':
-            fcn = torch.optim.Adagrad
-        elif optimizer is 'adamax':
-            fcn = torch.optim.Adamax
-        elif optimizer is 'adam':
-            fcn = torch.optim.Adam 
-        elif optimizer is 'rms':
-            fcn = torch.optim.RMSprop
-        elif optimizer is 'sgd':
-            fcn = torch.optim.SGD 
 
+        fcn = self._optimFcns[optimizer]
         return fcn(self.model.parameters(),lr=alpha,weight_decay=regularization)
 
     def _get_loss(self,loss):
         """
-        initializes the loss function
+        returns an aliased loss function
         """
-        if loss is 'l2':
-            return torch.nn.MSELoss
-        elif loss is 'l1':
-            return torch.nn.L1Loss
-        elif loss is 'cross':
-            return torch.nn.CrossEntropyLoss
-        elif loss is 'llh':
-            return torch.nn.NLLLoss
-        elif loss is 'kldiv':
-            return torch.nn.KLDivLoss
-        elif loss is 'bce':
-            return torch.nn.BCEloss
-        elif loss is 'huber':
-            return torch.nn.SmoothL1Loss
-
-    def _initialize_training(self,nEpochs,optimizer,alpha,regularization,loss):
-        """
-        initializes optimizer, cost, and loss function for training
-        """  
-        self.costs = np.zeros(nEpochs)
-        self.optimizer = self._get_optimizer(optimizer,alpha,regularization)
-        self.loss = self._get_loss(loss)
-        self.model.train() # sets model to training mode so we can update params
+        return self._lossFcns[loss]
 
     def _forward(self,X):
         """ 
@@ -283,3 +280,9 @@ class NN():
         X_tensor = self._toTensor(X)
         Yhat = self._forward(X_tensor)
         return Yhat.detach().to('cpu').numpy()
+
+    def print(self):
+        print('network architecture:\n')
+        print('-----------------------')
+        print(self.model)
+        print('-----------------------\n')
