@@ -4,7 +4,29 @@ series of utilities for torch model learning
 
 import numpy as np
 import torch
+from torch import nn, optim
 from collections import OrderedDict
+
+
+lossFcns = {
+    'l2': nn.MSELoss,
+    'l1': nn.L1Loss,
+    'cross': nn.CrossEntropyLoss,
+    'llh': nn.NLLLoss,
+    'kldiv': nn.KLDivLoss,
+    'bce': nn.BCELoss,
+    'huber': nn.SmoothL1Loss
+}
+
+optimFcns = {
+    'adadelta': optim.Adadelta, 
+    'adagrad': optim.Adagrad,
+    'adamax': optim.Adamax,
+    'adam': optim.Adam,
+    'rms': optim.RMSprop,
+    'sgd': optim.SGD 
+}
+
 
 #####################################################################
 # PLOTTING FUNCTIONS
@@ -16,7 +38,7 @@ def plot(model):
 #####################################################################
 # UTILITY FUNCTIONS
 #####################################################################
-def buildMLP(layers,activations):
+def buildMLP(layers, activations):
     """
     builds a dense MLP using the provided activation functions and layer sizes
 
@@ -39,10 +61,10 @@ def buildMLP(layers,activations):
     model = OrderedDict()
     nLayers = len(layers)
     for l in range(nLayers-1):
-        model['linear' + str(l+1)] = torch.nn.Linear(layers[l],layers[l+1])
-        model['activation' + str(l+1)] = getattr(torch.nn,activations[l])()
+        model['linear_' + str(l+1)] = torch.nn.Linear(layers[l],layers[l+1])
+        model['activation_' + str(l+1)] = getattr(torch.nn,activations[l])()
         if l < nLayers-2:
-            model['normalization' + str(l+1)] = torch.nn.BatchNorm1d(layers[l+1])
+            model['norm_' + str(l+1)] = torch.nn.BatchNorm1d(layers[l+1])
 
     return model
 
@@ -62,7 +84,7 @@ def buildRNN(layers,cellType,dropout):
 
         dropout :
             a fload between [0,1] specifying dropout probability for the RNN layers. 
-            If dropout > 0, no dropout layer will be added
+            If dropout = 0, no dropout layer will be added
     """
     model = OrderedDict()
     L = len(layers)
@@ -76,9 +98,9 @@ def buildRNN(layers,cellType,dropout):
             if type(inSize) is tuple or type(inSize) is list:
                 inSize = inSize[-1]
 
-        model[cellType[l] + str(l+1)] = getattr(torch.nn,cellType[l]+'Cell')(inSize, outSize, True)
-        if l < L-1 and dropout > 0:
-            model['Dropout' + str(l+1)] = torch.nn.Dropout(dropout)
+        model['recurrent_' + str(l+1)] = getattr(torch.nn, cellType[l])(inSize, outSize)
+        if l < L and dropout > 0:
+            model['dropout_' + str(l+1)] = torch.nn.Dropout(dropout)
 
     return model
 
@@ -101,7 +123,7 @@ def set_initial_conditions(model):
     model.load_state_dict(params)
     return model
 
-def find_num_batches(N,batchSize):
+def find_num_batches(N, batchSize):
     """
     determines the # of batches for training
 
@@ -113,17 +135,13 @@ def find_num_batches(N,batchSize):
         batchSize :
             integer, the desired size of each training batch
     """
-    nBatches = int(np.floor(N / batchSize))
-    extra = np.mod(N,batchSize)
+    nBatches = int(np.ceil(N / batchSize))
     batches = [batch*batchSize for batch in range(nBatches)]
+    batches[-1] = N
 
-    if extra > 0:
-        batches.append(batches[-1]+batchSize+extra)
-        nBatches += 1
+    return nBatches, batches
 
-    return nBatches, batches, extra
-
-def shuffle(X,Y,inds):
+def shuffle(X, Y, inds):
     """
     Shuffles the data in X and Y in place to avoid memory overhead 
     """
@@ -134,7 +152,7 @@ def shuffle(X,Y,inds):
 #####################################################################
 # GENERIC NETWORK CLASS
 #####################################################################
-class NN():
+class NN:
     """
     A generic class containing initialization and training methods used across various
     neural network architectures (deep sequential, recurrent, ...) in "model.py". The methods are 
@@ -150,37 +168,16 @@ class NN():
     -------
         initialized parameters and generic learning methods 
     """
-
-    def __init__(self,model,nnType):
+    def __init__(self, model, nnType):
         """
         establishes link to defined model and pushes to GPU if possible
         """
-        nn = torch.nn
-        optim = torch.optim 
 
         self.model = model
         self.type = nnType
-        self._optimFcns = { 'adadelta'  : optim.Adadelta, 
-                            'adagrad'   : optim.Adagrad,
-                            'adamax'    : optim.Adamax,
-                            'adam'      : optim.Adam,
-                            'rms'       : optim.RMSprop,
-                            'sgd'       : optim.SGD 
-                        }
-
-        self._lossFcns = {  'l2'        : nn.MSELoss,
-                            'l1'        : nn.L1Loss,
-                            'cross'     : nn.CrossEntropyLoss,
-                            'llh'       : nn.NLLLoss,
-                            'kldiv'     : nn.KLDivLoss,
-                            'bce'       : nn.BCELoss,
-                            'huber'     : nn.SmoothL1Loss
-                        }
 
         self._initialize_params()
 
-    # PRIVATE METHODS
-    ##########################
     def _initialize_params(self):
         """
         Initializes all parameters in the model
@@ -189,13 +186,16 @@ class NN():
         self._push_to_cuda()
         self.costs = None
 
-    def _initialize_training(self,nEpochs,optimizer,alpha,regularization,loss):
+    def _initialize_training(self, nEpochs, optimizer, alpha, regularization, loss):
         """
         initializes optimizer, cost, and loss function for training
         """  
         self.costs = np.zeros(nEpochs)
-        self.optimizer = self._get_optimizer(optimizer,alpha,regularization)
-        self.loss = self._get_loss(loss)
+        self.optimizer = optimFcns[optimizer](
+            self.model.parameters(), lr=alpha, weight_decay=regularization
+        )
+        self.optimizer = self._get_optimizer(optimizer, alpha, regularization)
+        self.loss = lossFcns[loss]()
         self.model.train() # sets model to training mode so we can update params
 
     def _push_to_cuda(self):
@@ -208,36 +208,29 @@ class NN():
         else:
             self.device = torch.device('cpu')
 
-    def _get_optimizer(self,optimizer,alpha,regularization):
+    def _get_optimizer(self, optimizer, alpha, regularization):
         """
         initiates the optimizing function
         """
+        fcn = optimFcns[optimizer]
+        return fcn(self.model.parameters(), lr=alpha, weight_decay=regularization)
 
-        fcn = self._optimFcns[optimizer]
-        return fcn(self.model.parameters(),lr=alpha,weight_decay=regularization)
-
-    def _get_loss(self,loss):
-        """
-        returns an aliased loss function
-        """
-        return self._lossFcns[loss]
-
-    def _forward(self,X):
+    def _forward(self, X):
         """ 
         Perform one forward pass of the model and computes the loss
         """
         self.model(X)
 
-    def _backward(self,Y,Yhat):
+    def _backward(self, Y, Yhat):
         """ 
         Performs one backward pass through the network and updates the parameters
         of the model (for all learnable parameters)
         """
-        self.loss(Y,Yhat)
-        self.loss.backward()
+        loss = self.loss(Y, Yhat)
+        loss.backward()
         self.optimizer.step()
 
-    def _toTensor(self,X):
+    def _toTensor(self, X):
         """
         converts a numpy array to a torch tensor and pushes to GPU if available
         """
@@ -245,22 +238,22 @@ class NN():
         X_tensor.to(self.device)
         return X_tensor
 
-    # PUBLIC METHODS
-    ##########################
+
     def forget(self):
         """
         re-initializes parameters and costs (forgets learning)
         """
         self._initialize_params()
 
-    def update(self,model):
+    def update(self, model):
         """
         updates the torch model in "self.model" by appending a new model
         as the last "layer" in the current model
         """
-        self.model = torch.nn.Sequential(*list(self.model.children()),*list(model.children()))
+        for layer in model.named_children():
+            self.model.add_module(layer[0], layer[1])
 
-    def predict(self,X):
+    def predict(self, X):
         """
         Predict the response to X from a forward pass through the network
 
